@@ -1,0 +1,5 @@
+
+importFrom(mvtnorm, rmvnorm, dmvnorm)
+importFrom(stats,dnorm, rnorm, rexp, optim, pnorm, qnorm, runif)
+export(drw)
+export(drw.sim)
