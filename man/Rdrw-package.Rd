@@ -9,12 +9,15 @@ The R package \pkg{Rdrw} provides a toolbox to fit and simulate univariate and m
 \tabular{ll}{
 Package: \tab Rdrw\cr
 Type: \tab Package\cr
-Version: \tab 1.0.0\cr
-Date: \tab 2020-5-6\cr
+Version: \tab 1.0.1\cr
+Date: \tab 2020-5-18\cr
 License: \tab GPL-2\cr
 Main functions: \tab \code{\link{drw}}, \code{\link{drw.sim}}\cr
 }
 }
 \author{
 Zhirui Hu and Hyungsuk Tak
+}
+\references{
+    Zhirui Hu and Hyungsuk Tak (2020+), "Modeling Stochastic Variability in  Multi-Band Time Series Data," arXiv:2005.08049.
 }
