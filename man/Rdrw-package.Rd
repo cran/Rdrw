@@ -9,8 +9,8 @@ The R package \pkg{Rdrw} provides a toolbox to fit and simulate univariate and m
 \tabular{ll}{
 Package: \tab Rdrw\cr
 Type: \tab Package\cr
-Version: \tab 1.0.1\cr
-Date: \tab 2020-5-18\cr
+Version: \tab 1.0.2\cr
+Date: \tab 2020-9-8\cr
 License: \tab GPL-2\cr
 Main functions: \tab \code{\link{drw}}, \code{\link{drw.sim}}\cr
 }

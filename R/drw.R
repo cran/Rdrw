@@ -466,7 +466,12 @@ drw <- function(data1, data2, data3, data4, data5,
     dat <- vector(mode = "list", length = k)
     for (i in 1 : k) {
       eval(parse(text = paste0("data.temp <- data", i)))
-      colnames(data.temp)[1] <- "V1"
+      if (is.null(colnames(data.temp))) {
+        colnames(data.temp) <- colnames(data.temp, do.NULL = FALSE)
+        colnames(data.temp)[1] <- "V1"
+      } else {
+        colnames(data.temp)[1] <- "V1"
+      }
       dat[[i]] <- data.temp
     }
 
