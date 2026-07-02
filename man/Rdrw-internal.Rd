@@ -1,6 +1,4 @@
 \name{Rdrw-internal}
-\alias{log.lik}
-\alias{log.lik.single}
 \alias{bayes}
 \alias{bayes.single}
 

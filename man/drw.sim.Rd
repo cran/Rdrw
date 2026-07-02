@@ -1,35 +1,29 @@
 \name{drw.sim}
 \alias{drw.sim}
-\title{Simulating univariate and multiviarate damped random walk processes}
+\title{Simulating Univariate and Multivariate Damped Random Walk Processes}
 \usage{
 drw.sim(time, n.datasets, measure.error.SD, mu, sigma, tau, rho)
 }
 \arguments{
-\item{time}{A vector containing observation times. Let us use \eqn{n} to denote the length of this vector.
-}
-\item{n.datasets}{Any positive integer value that denotes the number of time series data sets to be simulated. In simulation, there is no upper limit in the number of time series data sets. Let's use \eqn{k} to denote this number of time series data sets.
-}
-\item{measure.error.SD}{Optional if measurement error standard deviations are known and available. If one time series data set is simulated, it is a vector of length \eqn{n} containing measurement error standard deviations. If more than one time series data sets are simulated, it is an \eqn{n} by \eqn{k} matrix composed of measurement error standard deviations. If such information is not available, it is automatically set to zeros.}
-
-\item{mu}{A vector of length \eqn{k}, containing the long-term average parameter(s) of the process.}
-
-\item{sigma}{A vector of length \eqn{k}, containing the short-term variability parameter(s) (standard deviation) of the process.}
-
-\item{tau}{A vector of length \eqn{k}, containing the timescale parameter(s) of the process.}
-
-\item{rho}{Required if more than one time series data sets are simulated \eqn{(k>1)}. A vector of length \eqn{k(k-1)/2}, containing the cross-correlation parameters of the process. For example, if \eqn{k=3}, this is a vector composed of \eqn{\rho_{12}}, \eqn{\rho_{13}}, \eqn{\rho_{23}}. If \eqn{k=5}, this is a vector composed of \eqn{\rho_{12}}, \eqn{\rho_{13}}, \eqn{\rho_{14}}, \eqn{\rho_{15}}, \eqn{\rho_{23}}, \eqn{\rho_{24}}, \eqn{\rho_{25}}, \eqn{\rho_{34}}, \eqn{\rho_{35}}, \eqn{\rho_{45}}.}
+\item{time}{A vector of observation times. Let n denote the length of this vector.}
+\item{n.datasets}{A positive integer giving the number of time series to be simulated. In simulation, there is no upper limit on the number of time series. Let k denote this number.}
+\item{measure.error.SD}{Optional measurement error standard deviations. If one time series is simulated, this is a vector of length n. If more than one time series is simulated, this is an n by k matrix of measurement error standard deviations. If this information is unavailable, it is automatically set to zero.}
+\item{mu}{A vector of length k containing the long-term mean parameter or parameters.}
+\item{sigma}{A vector of length k containing the short-term variability parameter or parameters, expressed as standard deviations.}
+\item{tau}{A vector of length k containing the timescale parameter or parameters.}
+\item{rho}{Required when more than one time series is simulated, k > 1. This is a vector of length k(k - 1) / 2 containing the cross-correlation parameters. For example, if k = 3, this vector contains rho_12, rho_13, and rho_23. If k = 5, this vector contains rho_12, rho_13, rho_14, rho_15, rho_23, rho_24, rho_25, rho_34, rho_35, and rho_45.}
 }
 \value{
-The outcome of \code{drw.sim} is composed of:
+The output of \code{drw.sim} is a list containing:
 \describe{
-\item{x}{An \eqn{n} by \eqn{k} matrix composed of \eqn{k} simulated time series data each with length \eqn{n}. That is, each column is corresponding to one simulated time series data set.}
+\item{x}{An n by k matrix of simulated time series. Each column corresponds to one simulated time series.}
 }
 }
 \description{
-The function \code{drw.sim} simulates time series data set(s) following either univariate or multivariate damped random walk process.
+The function \code{drw.sim} simulates one or more time series from univariate or multivariate damped random walk processes.
 }
 \details{
-Given the \eqn{n} observation times and model parameter values (mu, sigma, tau, rho) possibly with known measurement error standard deviations, this function simulates \eqn{k} time series data sets.
+Given observation times and model parameter values \code{mu}, \code{sigma}, \code{tau}, and optionally \code{rho}, this function simulates k time series, optionally including known measurement error standard deviations.
 }
 \examples{
 ########## Simulating a multivariate damped random walk process
@@ -38,16 +32,14 @@ n <- 100
 k <- 5
 obs.time <- cumsum(rgamma(n, shape = 3, rate = 1))
 
-tau <- 100 + 20 * (1 : 5) #rnorm(k, 0, 5)
-sigma <- 0.01 * (1 : 5)
-#tau <- c(1 : 5) #rnorm(k, 0, 5)
-#sigma <- 0.05  + 0.007 * (0 : 4) #rnorm(k, 0, 0.002)
-mu <- 17 + 0.5 * (1 : 5)
+tau <- 100 + 20 * (1:5)
+sigma <- 0.01 * (1:5)
+mu <- 17 + 0.5 * (1:5)
 
 rho.m <- matrix(0, k, k)
-for(i in 1 : k) {
-  for(j in 1 : k) {
-    rho.m[i, j] = 1.1^(-abs(i - j))
+for (i in 1:k) {
+  for (j in 1:k) {
+    rho.m[i, j] <- 1.1^(-abs(i - j))
   }
 }
 
@@ -55,13 +47,12 @@ rho <- rho.m[upper.tri(rho.m)]
 
 measure.error.band <- c(0.010, 0.014, 0.018, 0.022, 0.026)
 measure.error <- NULL
-for(i in 1 : k) {
+for (i in 1:k) {
   measure.error <- cbind(measure.error, rnorm(n, measure.error.band[i], 0.002))
 }
 
 x <- drw.sim(time = obs.time, n.datasets = 5, measure.error.SD = measure.error,
              mu = mu, sigma = sigma, tau = tau, rho = rho)
-
 
 plot(obs.time, x[, 1], xlim = c(min(obs.time), max(obs.time)), ylim = c(17, 20),
      xlab = "time", ylab = "observation")
@@ -80,5 +71,5 @@ plot(obs.time, x)
 Zhirui Hu and Hyungsuk Tak
 }
 \references{
-    Zhirui Hu and Hyungsuk Tak (2020+), "Modeling Stochastic Variability in  Multi-Band Time Series Data," arXiv:2005.08049.
+Zhirui Hu and Hyungsuk Tak (2020), "Modeling Stochastic Variability in Multi-Band Time Series Data," doi:10.48550/arXiv.2005.08049.
 }
