@@ -71,5 +71,5 @@ plot(obs.time, x)
 Zhirui Hu and Hyungsuk Tak
 }
 \references{
-Zhirui Hu and Hyungsuk Tak (2020), "Modeling Stochastic Variability in Multi-Band Time Series Data," doi:10.48550/arXiv.2005.08049.
+Zhirui Hu and Hyungsuk Tak (2020), "Modeling Stochastic Variability in Multi-Band Time Series Data," doi:10.3847/1538-3881/abc1e2.
 }

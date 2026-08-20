@@ -1,5 +1,3 @@
-
-importFrom(stats,dnorm, rnorm, rexp, optim, pnorm, qnorm, runif)
+importFrom(stats,rnorm,rexp,optim)
 export(drw)
 export(drw.sim)
-importFrom(stats,lm,poly,lm.fit)

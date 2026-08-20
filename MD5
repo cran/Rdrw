@@ -1,7 +1,7 @@
-96ddf3481cf53f4a76fda83869a51f6a *DESCRIPTION
-5f30fae46383a332cfe31a54d9db8c1a *NAMESPACE
-3360a835ea93412263a56f5dde6f979c *R/drw.R
-c61f3f8647f59d13fbbf4ce3bc62c052 *man/Rdrw-internal.Rd
-eba95d147d3d82c0aca171d5e45cd1e9 *man/Rdrw-package.Rd
-219ead72f2bb9f6a10017fb86c9b7aff *man/drw.Rd
-d7f06c412c714df2cf89b44cb5639f8c *man/drw.sim.Rd
+a03192cfe03da2c221943635369f9836 *DESCRIPTION
+6adb1513dc08d6057cd7b67432a9f5ab *NAMESPACE
+8fb0cd3482d29635a865e62cd3cfeb57 *R/drw.R
+17b0f9578c36d383f1d00a1226160943 *man/Rdrw-internal.Rd
+10414bfb4bbd7ea7a8eec4365b9a3a2d *man/Rdrw-package.Rd
+344e2adee46c25d3aedef947a571e9c2 *man/drw.Rd
+b475a6d8c7eebfd125efa6f357e130cb *man/drw.sim.Rd

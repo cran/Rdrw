@@ -19,7 +19,7 @@ drw(data1, data2 = NULL, data3 = NULL, data4 = NULL, data5 = NULL,
 \item{data9}{Optional ninth data set in the same format as \code{data1}.}
 \item{data10}{Optional tenth data set in the same format as \code{data1}. The current version allows up to ten time series data sets.}
 \item{n.datasets}{The number of time series data sets to be modeled jointly. This must be an integer from 1 to 10.}
-\item{method}{Either \code{"mle"} for maximum likelihood estimation or \code{"bayes"} for posterior sampling.}
+\item{method}{Either \code{"mle"} for maximum likelihood estimation or \code{"bayes"} for posterior sampling. Maximum likelihood estimation is computationally efficient and suitable for large-scale data analysis, while Bayesian posterior sampling is better suited to small-scale analyses requiring more careful uncertainty quantification.}
 \item{poly.order}{The order of the polynomial trend used for the mean function of each time series. The default is 1, corresponding to an intercept and a linear trend in normalized time. Use 0 for the constant-mean damped random walk model.}
 \item{bayes.n.burn}{The number of warm-up iterations when \code{method = "bayes"}.}
 \item{bayes.n.sample}{The number of posterior samples saved after warm-up when \code{method = "bayes"}.}
@@ -40,7 +40,7 @@ The returned object is a list. For \code{method = "mle"}, it contains:
 For \code{method = "bayes"}, \code{beta}, \code{sigma}, \code{tau}, \code{tau.days}, and \code{rho} contain posterior samples, with one row per saved MCMC iteration. The output also includes \code{sigma.accept.rate}, \code{tau.accept.rate}, and \code{rho.accept.rate}.
 }
 \description{
-The function \code{drw} fits univariate and multivariate damped random walk processes to one or more irregularly spaced time series with possibly heteroscedastic measurement errors. The current implementation allows each time series to have a polynomial mean trend in normalized time. This feature is useful in applications such as stock price prediction, where a constant mean may be too restrictive. The likelihood is evaluated by Kalman filtering, and the function returns maximum likelihood estimates or posterior samples of the model parameters.
+The function \code{drw} fits univariate and multivariate damped random walk processes to one or more irregularly spaced time series with possibly heteroscedastic measurement errors. The current implementation allows each time series to have a polynomial mean trend in normalized time. This feature is useful in applications such as stock price prediction, where a constant mean may be too restrictive. The likelihood is evaluated by Kalman filtering. Conditional on the damped random walk covariance parameters, the polynomial mean coefficients are linear Gaussian location parameters. For maximum likelihood estimation they are profiled analytically by generalized least squares within the Kalman recursion, and for Bayesian inference they are updated from their exact Gaussian conditional distribution. The function returns maximum likelihood estimates or posterior samples of the model parameters.
 }
 \details{
 The multivariate damped random walk process is also known as the Ornstein--Uhlenbeck process or a CARMA(1, 0) process. In the updated model, the long-term mean of the j-th time series is represented as
@@ -56,6 +56,10 @@ where t_min and t_max are the minimum and maximum combined observation times, re
 Because the likelihood is evaluated on normalized time, the estimated \code{tau} values are also on the normalized-time scale. To convert them back to the original time scale, multiply by \code{time.range = max(time) - min(time)}. For example, if the combined observation times span 2,000 days and \code{tau = 0.05}, then the corresponding timescale is \code{0.05 * 2000 = 100} days. The returned object includes this converted value as \code{tau.days}.
 
 The polynomial coefficients in \code{beta} should be interpreted on the same normalized-time scale. For example, with \code{poly.order = 1}, the fitted mean is beta_j0 + beta_j1 * u, so beta_j1 is the total linear change over the normalized interval [0, 1], not the daily slope.
+
+For computational efficiency, the polynomial coefficients are not included in the nonlinear optimizer used for maximum likelihood estimation. At each proposed set of covariance parameters, the Kalman recursion accumulates the Gaussian sufficient statistics for the polynomial coefficients and solves for their conditional generalized least squares estimates exactly. The coefficients remain estimated model parameters and are returned in the same order as in previous versions.
+
+For Bayesian inference, the same Kalman sufficient statistics define the exact Gaussian conditional distribution of the polynomial coefficients under the package's diffuse Gaussian prior. The sampler draws these coefficients directly and caches the current Kalman sufficient statistics and log likelihood during the Metropolis--Hastings updates of the covariance parameters, avoiding redundant likelihood evaluations.
 
 For multivariate fitting, the individual data sets are merged by observation time. Missing measurements at a given time are allowed and are handled by the Kalman filter. The input measurement-error column should contain standard deviations, not variances.
 
@@ -93,4 +97,4 @@ res2.mle <- drw(data1 = data1, data2 = data2, n.datasets = 2,
 }
 }
 \author{Zhirui Hu and Hyungsuk Tak}
-\references{Zhirui Hu and Hyungsuk Tak (2020), "Modeling Stochastic Variability in Multi-Band Time Series Data," doi:10.48550/arXiv.2005.08049.}
+\references{Zhirui Hu and Hyungsuk Tak (2020), "Modeling Stochastic Variability in Multi-Band Time Series Data," doi:10.3847/1538-3881/abc1e2.}
