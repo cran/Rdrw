@@ -260,7 +260,12 @@ bayes <- function(data, theta, n.warm, n.sample, k, n_b_per_k,
 
   curr_th_sigma2 <- log(curr_sigma2)
   curr_th_tau <- log(curr_tau)
-  curr_th_rho <- if (n.rho > 0) 2 * atanh(curr_rho) else numeric(0)
+  curr_R <- diag(k)
+  if (n.rho > 0) {
+    curr_R[upper.tri(curr_R)] <- curr_rho
+    curr_R[lower.tri(curr_R)] <- t(curr_R)[lower.tri(curr_R)]
+  }
+  curr_th_rho <- drw_z_from_corr(curr_R)
 
   b_sig_low <- lower_bounds[seq_len(k)]
   b_sig_upp <- upper_bounds[seq_len(k)]
@@ -356,18 +361,17 @@ bayes <- function(data, theta, n.warm, n.sample, k, n_b_per_k,
       for (j in seq_len(n.rho)) {
         th_rho_p <- rnorm(1, mean = curr_th_rho[j], sd = rho.prop.scale[j])
         if (th_rho_p >= b_rho_low[j] && th_rho_p <= b_rho_upp[j]) {
-          prop_rho <- curr_rho
-          prop_rho[j] <- tanh(th_rho_p / 2)
+          prop_z <- curr_th_rho
+          prop_z[j] <- th_rho_p
+          prop_rho <- drw_corr_from_z(prop_z, k)
 
           prop_suff <- drw_filter_suff(data, curr_sigma2, curr_tau, prop_rho, n_b_per_k)
           prop_loglik <- drw_log_lik_from_suff(prop_suff, sampled_beta)
           l_ratio <- prop_loglik - curr_loglik
 
-          # The additive constant in the Jacobian cancels in the ratio.
-          l_jacobian <- -2 * log(cosh(th_rho_p / 2)) +
-                         2 * log(cosh(curr_th_rho[j] / 2))
-
-          if (is.finite(l_ratio) && l_ratio + l_jacobian > -rexp(1)) {
+          # Symmetric random walk with uniform prior on bounded z;
+          # no Jacobian correction is needed in this parameterization.
+          if (is.finite(l_ratio) && l_ratio > -rexp(1)) {
             curr_th_rho[j] <- th_rho_p
             curr_rho <- prop_rho
             curr_suff <- prop_suff
@@ -399,6 +403,7 @@ bayes <- function(data, theta, n.warm, n.sample, k, n_b_per_k,
   list(
     beta = beta_chain,
     sigma = sqrt(sigma2_chain),
+    sigma2 = sigma2_chain,
     tau = tau_chain,
     rho = rho_chain,
     sigma.accept.rate = colMeans(sigma2.accept[saved_iter, , drop = FALSE]),
@@ -414,10 +419,140 @@ bayes <- function(data, theta, n.warm, n.sample, k, n_b_per_k,
 # 4. MASTER WRAPPER DRW INTERFACE
 # ====================================================================
 
+# Correlation matrix from unconstrained row-wise partial correlations.
+# The Cholesky construction guarantees positive definiteness.
+drw_corr_from_z <- function(z, k) {
+  L <- diag(k)
+  if (k > 1L) {
+    ix <- 1L
+    for (i in 2:k) {
+      remain <- 1
+      for (j in seq_len(i - 1L)) {
+        a <- tanh(z[ix])
+        L[i, j] <- a * remain
+        remain <- remain * sqrt(1 - a^2)
+        ix <- ix + 1L
+      }
+      L[i, i] <- remain
+    }
+  }
+  R <- tcrossprod(L)
+  as.numeric(R[upper.tri(R)])
+}
+
+
+# Convert a positive-definite correlation matrix to unconstrained partial
+# correlations, inverse of drw_corr_from_z().
+drw_z_from_corr <- function(R) {
+  k <- nrow(R)
+  if (k == 1L) return(numeric(0))
+  L <- t(chol(R))
+  z <- numeric(k * (k - 1L) / 2L)
+  ix <- 1L
+  for (i in 2:k) {
+    remain <- 1
+    for (j in seq_len(i - 1L)) {
+      a <- max(-1 + 1e-10, min(1 - 1e-10, L[i,j] / remain))
+      z[ix] <- atanh(a)
+      remain <- remain * sqrt(1 - a^2)
+      ix <- ix + 1L
+    }
+  }
+  z
+}
+
+# Cheap, observation-adaptive marginal OU likelihood optimizations.
+# All internal timescales and diffusion variances use normalized time.
+drw_univariate_warm <- function(dat, time.range, n_b_per_k,
+                                tau.override = NULL, maxit = 500L) {
+  tt <- dat[,1]; yy <- dat[,2]; ee <- dat[,3]
+  ok <- is.finite(tt) & is.finite(yy) & is.finite(ee) & ee >= 0
+  tt <- tt[ok]; yy <- yy[ok]; ee <- ee[ok]
+  if (length(tt) < max(3L, n_b_per_k + 1L)) return(NULL)
+  ord <- order(tt); tt <- tt[ord]; yy <- yy[ord]; ee <- ee[ord]
+  d <- diff(sort(unique(tt)))
+  d <- d[d > 0 & is.finite(d)]
+  if (!length(d)) return(NULL)
+  span <- max(tt) - min(tt)
+  cadence <- as.numeric(stats::quantile(d, .5, names = FALSE))
+  low <- max(min(d), cadence / 2, span * 1e-5)
+  high <- max(low * 1.01, span)
+  if (!is.null(tau.override)) {
+    starts_tau <- rep(tau.override, 3L)
+  } else {
+    starts_tau <- c(sqrt(low * high), low * (high / low)^.25,
+                    low * (high / low)^.75)
+  }
+  v <- stats::var(yy) - mean(ee^2)
+  if (!is.finite(v) || v <= 1e-10) v <- stats::var(yy)
+  if (!is.finite(v) || v <= 0) v <- 1e-6
+  dd <- cbind(tt, yy, ee)
+  obj <- function(par) {
+    tau <- exp(par[2]); sig2 <- 2 * exp(par[1]) / tau
+    pr <- drw_profile_from_suff(drw_filter_suff(dd, sig2, tau,
+                                                  numeric(0), n_b_per_k))
+    if (is.finite(pr$loglik)) -pr$loglik else 1e12
+  }
+  lo <- c(-25, log(1e-5)); hi <- c(25, log(1e4))
+  candidates <- lapply(starts_tau, function(tau) {
+    par <- c(log(v), log(tau / span))
+    par <- pmax(lo, pmin(hi, par))
+    tryCatch(stats::optim(par, obj, method = 'L-BFGS-B', lower = lo,
+      upper = hi, control = list(maxit = maxit)),
+      error = function(e) list(value = Inf, convergence = 999L))
+  })
+  val <- vapply(candidates, function(x) x$value, numeric(1))
+  if (!any(is.finite(val) & val < 1e11)) return(NULL)
+  best <- candidates[[which.min(val)]]
+  tau <- exp(best$par[2]); sig2 <- 2 * exp(best$par[1]) / tau
+  list(tau = tau * span / time.range, sigma2 = sig2 * time.range / span, convergence = best$convergence,
+       logLik = -best$value, cadence = cadence, baseline = span)
+}
+
+# Standardized marginal one-step prediction innovations at observed times.
+# At asynchronous times only exactly overlapping innovations are paired.
+drw_innovation_corr_start <- function(data, tau, sigma2, beta, k,
+                                      n_b_per_k, shrink = .25) {
+  if (k < 2L) return(matrix(1, 1, 1))
+  t <- data[,1]; span <- max(t)-min(t); u <- (t-min(t))/span
+  innov <- matrix(NA_real_, nrow(data), k)
+  for (j in seq_len(k)) {
+    y <- data[,2*j]; e <- data[,2*j+1]
+    ok <- which(is.finite(y) & is.finite(e) & e>=0)
+    if (length(ok) < 3L) next
+    bj <- beta[((j-1)*n_b_per_k+1):(j*n_b_per_k)]
+    mu <- as.numeric(outer(u, 0:(n_b_per_k-1), `^`) %*% bj)
+    v <- sigma2[j]*tau[j]/2; state <- 0; P <- v
+    last_u <- u[ok[1]]
+    for (ix in ok) {
+      a <- exp(-(u[ix]-last_u)/tau[j]);
+      state <- a*state; P <- a*a*P+v*(1-a*a)
+      F <- P+e[ix]^2
+      if (is.finite(F) && F>0) {
+        err <- y[ix]-mu[ix]-state
+        innov[ix,j] <- err/sqrt(F)
+        gain <- P/F
+        state <- state+gain*err; P <- P*(1-gain)
+      }
+      last_u <- u[ix]
+    }
+  }
+  R <- suppressWarnings(stats::cor(innov, use='pairwise.complete.obs'))
+  if (any(!is.finite(R))) return(NULL)
+  R <- (R+t(R))/2; diag(R) <- 1
+  R <- (1-shrink)*R+shrink*diag(k)
+  ee <- eigen(R, symmetric=TRUE)
+  ee$values <- pmax(ee$values, 1e-4)
+  R <- ee$vectors %*% diag(ee$values,k) %*% t(ee$vectors)
+  stats::cov2cor(R)
+}
+
 drw <- function(data1, data2 = NULL, data3 = NULL, data4 = NULL, data5 = NULL,
                 data6 = NULL, data7 = NULL, data8 = NULL, data9 = NULL, data10 = NULL,
                 n.datasets, method = "mle", poly.order = 1,
-                bayes.n.burn = 3000, bayes.n.sample = 1000) {
+                bayes.n.burn = 3000, bayes.n.sample = 1000,
+                n.starts = 1, seed = NULL,
+                optim.maxit = 3000, init.method = c("univariate", "legacy")) {
 
   message(paste("Starting at: ", Sys.time()))
 
@@ -430,6 +565,7 @@ drw <- function(data1, data2 = NULL, data3 = NULL, data4 = NULL, data5 = NULL,
     stop("'poly.order' must be a nonnegative integer.")
   }
   method <- match.arg(method, c("mle", "bayes"))
+  init.method <- match.arg(init.method)
   if (length(bayes.n.burn) != 1 || !is.finite(bayes.n.burn) ||
       bayes.n.burn != as.integer(bayes.n.burn) || bayes.n.burn < 0) {
     stop("'bayes.n.burn' must be a nonnegative integer.")
@@ -474,97 +610,160 @@ drw <- function(data1, data2 = NULL, data3 = NULL, data4 = NULL, data5 = NULL,
     stop("The observation times must contain at least two distinct finite values.")
   }
 
-  # Initial covariance parameters.  Beta is not part of the numerical optimizer;
-  # it is solved exactly by conditional GLS for every covariance proposal.
-  init_meas_sd <- colMeans(
-    data.comb[, seq(3, 2 * k + 1, by = 2), drop = FALSE],
-    na.rm = TRUE
-  )
-  init_meas_sd[!is.finite(init_meas_sd) | init_meas_sd <= 0] <- 1e-4
+  if (length(n.starts) != 1L || !is.finite(n.starts) ||
+      n.starts < 1 || n.starts != as.integer(n.starts))
+    stop("'n.starts' must be a positive integer.")
+  if (length(optim.maxit) != 1L || !is.finite(optim.maxit) ||
+      optim.maxit < 1 || optim.maxit != as.integer(optim.maxit))
+    stop("'optim.maxit' must be a positive integer.")
+  if (!is.null(seed)) set.seed(seed)
 
-  init_th_rho <- rep(2 * atanh(0.01), n.rho)
-  initial.temp <- c(
-    2 * log(init_meas_sd),
-    log(rep(100, k)),
-    init_th_rho
-  )
+  # Work in normalized time internally; report physical-time parameters.
+  # For dX(t)=-X(t)/tau dt + sigma dW(t), normalized-time
+  # diffusion variance = physical-time diffusion variance * time.range.
+  y_cols <- seq(2, 2 * k, by = 2)
+  e_cols <- seq(3, 2 * k + 1, by = 2)
+  sd_y <- vapply(seq_len(k), function(j) {
+    yy <- data.comb[, y_cols[j]]
+    ee <- data.comb[, e_cols[j]]
+    v <- stats::var(yy, na.rm = TRUE) - mean(ee^2, na.rm = TRUE)
+    if (!is.finite(v) || v <= 1e-8) v <- stats::var(yy, na.rm = TRUE)
+    sqrt(max(v, 1e-6, na.rm = TRUE))
+  }, numeric(1))
+  warm <- vector('list', k)
+  if (init.method == 'univariate') {
+    for (j in seq_len(k)) {
+      sub <- data.comb[, c(1L, y_cols[j], e_cols[j]), drop=FALSE]
+      warm[[j]] <- drw_univariate_warm(sub, raw_t_range, n_b_per_k,
+                       NULL,
+                       maxit = min(500L, as.integer(optim.maxit)))
+    }
+  }
+  tau0 <- numeric(k); sig20 <- numeric(k)
+  for (j in seq_len(k)) {
+    if (!is.null(warm[[j]])) {
+      tau0[j] <- warm[[j]]$tau
+      sig20[j] <- warm[[j]]$sigma2
+    } else {
+      tj <- data.comb[,1][is.finite(data.comb[,y_cols[j]])]
+      dj <- diff(sort(unique(tj))); dj <- dj[dj > 0]
+      fallback <- if (length(dj)) sqrt(stats::median(dj) * (max(tj)-min(tj))) else .1 * raw_t_range
+      if (init.method == 'legacy') fallback <- 100 * raw_t_range
+      tau0[j] <- fallback / raw_t_range
+      sig20[j] <- 2 * sd_y[j]^2 / tau0[j]
+    }
+  }
+  n.cov <- 2L * k + n.rho
+  lower_bounds <- c(rep(-25, k), rep(log(1e-5), k), rep(-5, n.rho))
+  upper_bounds <- c(rep(25, k), rep(log(1e4), k), rep(5, n.rho))
 
-  lower_bounds <- c(rep(-20, k), rep(-15, k), rep(-10, n.rho))
-  upper_bounds <- c(rep(30, k), rep(20, k), rep(10, n.rho))
-
-  drw_profile_log_lik_optim <- function(th, k, n_b_per_k, data) {
+  objective <- function(th) {
     sigma2 <- exp(th[seq_len(k)])
     tau <- exp(th[k + seq_len(k)])
-    rho_values <- if (n.rho > 0) {
-      tanh(th[2 * k + seq_len(n.rho)] / 2)
-    } else numeric(0)
-
-    suff <- drw_filter_suff(data, sigma2, tau, rho_values, n_b_per_k)
+    rho_values <- drw_corr_from_z(th[2L * k + seq_len(n.rho)], k)
+    suff <- drw_filter_suff(data.comb, sigma2, tau, rho_values, n_b_per_k)
     prof <- drw_profile_from_suff(suff)
-    val <- prof$loglik
-    if (!is.finite(val)) -1e10 else val
+    if (!is.finite(prof$loglik)) return(1e12)
+    -prof$loglik
   }
-
-  opt.temp <- optim(
-    initial.temp,
-    drw_profile_log_lik_optim,
-    control = list(fnscale = -1, factr = 1e7),
-    method = "L-BFGS-B",
-    lower = lower_bounds,
-    upper = upper_bounds,
-    hessian = TRUE,
-    k = k,
-    n_b_per_k = n_b_per_k,
-    data = data.comb
-  )
-
+  # First start is deterministic, even when n.starts=1.
+  z0 <- if (k > 1L && init.method == 'univariate') {
+    drw_z_from_corr(matrix(.5, k, k) + diag(.5, k))
+  } else rep(0, n.rho)
+  theta0 <- c(log(sig20), log(tau0), z0)
+  theta0 <- pmin(upper_bounds, pmax(lower_bounds, theta0))
+  all_starts <- vector('list', as.integer(n.starts))
+  all_starts[[1L]] <- theta0
+  if (n.starts >= 2L) all_starts[[2L]] <- c(theta0[seq_len(2*k)], rep(0, n.rho))
+  if (n.starts >= 3L) {
+    base_suff <- drw_filter_suff(data.comb, exp(theta0[seq_len(k)]),
+      exp(theta0[k+seq_len(k)]), drw_corr_from_z(theta0[2*k+seq_len(n.rho)],k),
+      n_b_per_k)
+    base_prof <- drw_profile_from_suff(base_suff)
+    Ri <- if (is.finite(base_prof$loglik)) drw_innovation_corr_start(
+      data.comb, exp(theta0[k+seq_len(k)]), exp(theta0[seq_len(k)]),
+      base_prof$beta, k, n_b_per_k) else NULL
+    all_starts[[3L]] <- c(theta0[seq_len(2*k)],
+      if (is.null(Ri)) stats::runif(n.rho, -.4, .4) else drw_z_from_corr(Ri))
+  }
+  if (n.starts >= 4L) for (ii in 4:as.integer(n.starts)) {
+    if (ii == 4L) {
+      tt <- theta0 + c(rnorm(k, 0, .4), rnorm(k, 0, .7),
+                       stats::runif(n.rho, -.7, .7) - z0)
+    } else {
+      tau_random <- vapply(seq_len(k), function(j) {
+        if (!is.null(warm[[j]])) {
+          exp(stats::runif(1, log(max(warm[[j]]$cadence, 1e-6)),
+                                  log(max(warm[[j]]$baseline, warm[[j]]$cadence*1.01)))) / raw_t_range
+        } else exp(stats::runif(1, log(1e-4), log(1)))
+      }, numeric(1))
+      tt <- c(log(2*sd_y^2/tau_random), log(tau_random),
+              stats::runif(n.rho, -.7, .7))
+    }
+    all_starts[[ii]] <- pmin(upper_bounds, pmax(lower_bounds, tt))
+  }
+  if (method == "mle") {
+  fits <- lapply(all_starts, function(start) {
+    tryCatch(stats::optim(start, objective, method = "L-BFGS-B",
+      lower = lower_bounds, upper = upper_bounds,
+      control = list(maxit = optim.maxit, factr = 1e7)),
+      error = function(e) list(value = Inf, convergence = 999L,
+                              message = conditionMessage(e)))
+  })
+  vals <- vapply(fits, function(f) f$value, numeric(1))
+  if (!any(is.finite(vals))) stop("All MLE starts failed.")
+  best <- which.min(vals)
+  opt.temp <- stats::optim(fits[[best]]$par, objective, method = "L-BFGS-B",
+    lower = lower_bounds, upper = upper_bounds,
+    control = list(maxit = optim.maxit, factr = 1e5))
   sigma2.mle <- exp(opt.temp$par[seq_len(k)])
   tau.mle <- exp(opt.temp$par[k + seq_len(k)])
-  rho.mle <- if (n.rho > 0) {
-    tanh(opt.temp$par[2 * k + seq_len(n.rho)] / 2)
-  } else numeric(0)
-
-  mle_suff <- drw_filter_suff(
-    data.comb, sigma2.mle, tau.mle, rho.mle, n_b_per_k
-  )
+  rho.mle <- drw_corr_from_z(opt.temp$par[2L * k + seq_len(n.rho)], k)
+  mle_suff <- drw_filter_suff(data.comb, sigma2.mle, tau.mle, rho.mle, n_b_per_k)
   mle_profile <- drw_profile_from_suff(mle_suff)
-  if (!is.finite(mle_profile$loglik)) {
-    stop("The final profiled likelihood could not be evaluated.")
-  }
+  if (!is.finite(mle_profile$loglik)) stop("Final likelihood is invalid.")
+  initial.mle <- list(beta = mle_profile$beta,
+                      sigma2 = as.numeric(sigma2.mle),
+                      tau = as.numeric(tau.mle), rho = as.numeric(rho.mle))
 
-  initial.mle <- list(
-    beta = mle_profile$beta,
-    sigma2 = as.numeric(sigma2.mle),
-    tau = as.numeric(tau.mle),
-    rho = as.numeric(rho.mle)
-  )
-
+  } # end joint MLE optimization
   if (method == "bayes") {
-    res <- bayes(
-      data = data.comb,
-      theta = initial.mle,
-      n.warm = bayes.n.burn,
-      n.sample = bayes.n.sample,
-      k = k,
-      n_b_per_k = n_b_per_k,
-      lower_bounds = lower_bounds,
-      upper_bounds = upper_bounds
-    )
-    res$tau.days <- res$tau * raw_t_range
-    res$time.range <- raw_t_range
-    res$time.min <- min(raw_t)
-    res$data.comb <- data.comb
+    # Bayesian sampling uses the univariate warm start directly, without
+    # requiring joint MLE optimization; n.starts controls MLE only.
+    warm_sigma2 <- exp(theta0[seq_len(k)])
+    warm_tau <- exp(theta0[k + seq_len(k)])
+    warm_rho <- drw_corr_from_z(theta0[2*k + seq_len(n.rho)], k)
+    warm_suff <- drw_filter_suff(data.comb, warm_sigma2, warm_tau,
+                                 warm_rho, n_b_per_k)
+    warm_profile <- drw_profile_from_suff(warm_suff)
+    if (!is.finite(warm_profile$loglik)) stop('Invalid Bayesian warm start.')
+    initial.mle <- list(beta=warm_profile$beta, sigma2=warm_sigma2,
+                        tau=warm_tau, rho=warm_rho)
+    # The existing sampler operates in normalized time. Convert only at output.
+    res <- bayes(data = data.comb, theta = initial.mle,
+      n.warm = bayes.n.burn, n.sample = bayes.n.sample,
+      k = k, n_b_per_k = n_b_per_k,
+      lower_bounds = lower_bounds, upper_bounds = upper_bounds)
+    res$tau <- res$tau * raw_t_range
+    res$sigma <- sqrt(res$sigma2 / raw_t_range)
+    res$sigma2 <- NULL
   } else {
     res <- initial.mle
-    res$sigma <- sqrt(res$sigma2)
-    res$tau.days <- res$tau * raw_t_range
-    res$time.range <- raw_t_range
-    res$time.min <- min(raw_t)
-    res$data.comb <- data.comb
+    res$tau <- res$tau * raw_t_range
+    res$sigma <- sqrt(res$sigma2 / raw_t_range)
+    res$sigma2 <- NULL
     res$logLik <- mle_profile$loglik
     res$convergence <- opt.temp$convergence
+    res$message <- opt.temp$message
+    res$counts <- opt.temp$counts
+    res$starts <- data.frame(start = seq_along(fits),
+      negative_log_likelihood = vals,
+      convergence = vapply(fits, function(f) f$convergence, integer(1)))
+    res$best.start <- best
+    res$elapsed.note <- "Time measured externally; includes multistart and refinement."
   }
-
+  res$initialization <- list(method=init.method, n.starts=if (method=='mle') as.integer(n.starts) else 0L,
+    univariate=warm, correlation='Cholesky partial correlations')
   message(paste("Ending at: ", Sys.time()))
   res
 }
