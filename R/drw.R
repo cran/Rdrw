@@ -554,7 +554,9 @@ drw <- function(data1, data2 = NULL, data3 = NULL, data4 = NULL, data5 = NULL,
                 n.starts = 1, seed = NULL,
                 optim.maxit = 3000, init.method = c("univariate", "legacy")) {
 
-  message(paste("Starting at: ", Sys.time()))
+  run_started <- Sys.time()
+  run_cpu_start <- proc.time()
+  message("DRW fit started: ", format(run_started, "%Y-%m-%d %H:%M:%S %Z"))
 
   if (length(n.datasets) != 1 || !is.finite(n.datasets) ||
       n.datasets != as.integer(n.datasets) || n.datasets < 1 || n.datasets > 10) {
@@ -703,19 +705,46 @@ drw <- function(data1, data2 = NULL, data3 = NULL, data4 = NULL, data5 = NULL,
     all_starts[[ii]] <- pmin(upper_bounds, pmax(lower_bounds, tt))
   }
   if (method == "mle") {
-  fits <- lapply(all_starts, function(start) {
-    tryCatch(stats::optim(start, objective, method = "L-BFGS-B",
+  start_timings <- vector("list", length(all_starts))
+  fits <- lapply(seq_along(all_starts), function(ii) {
+    start <- all_starts[[ii]]
+    t0 <- Sys.time(); c0 <- proc.time()
+    message(sprintf("[%d/%d] Started: %s", ii, length(all_starts),
+                    format(t0, "%Y-%m-%d %H:%M:%S %Z")))
+    fit <- tryCatch(stats::optim(start, objective, method = "L-BFGS-B",
       lower = lower_bounds, upper = upper_bounds,
       control = list(maxit = optim.maxit, factr = 1e7)),
       error = function(e) list(value = Inf, convergence = 999L,
                               message = conditionMessage(e)))
+    t1 <- Sys.time(); dc <- proc.time() - c0
+    start_timings[[ii]] <<- data.frame(
+      start = ii, started = as.character(t0), finished = as.character(t1),
+      elapsed_seconds = as.numeric(difftime(t1, t0, units = "secs")),
+      cpu_user_seconds = unname(dc[["user.self"]]),
+      cpu_system_seconds = unname(dc[["sys.self"]]),
+      cpu_seconds = unname(dc[["user.self"]] + dc[["sys.self"]]),
+      child_cpu_seconds = unname(dc[["user.child"]] + dc[["sys.child"]]),
+      negative_log_likelihood = fit$value,
+      convergence = as.integer(fit$convergence), stringsAsFactors = FALSE)
+    message(sprintf("[%d/%d] Finished: %s | %.2f min | logLik=%.6f | conv=%d",
+                    ii, length(all_starts), format(t1, "%Y-%m-%d %H:%M:%S %Z"),
+                    start_timings[[ii]]$elapsed_seconds / 60, -fit$value,
+                    fit$convergence))
+    fit
   })
   vals <- vapply(fits, function(f) f$value, numeric(1))
   if (!any(is.finite(vals))) stop("All MLE starts failed.")
   best <- which.min(vals)
+  refine_started <- Sys.time(); refine_cpu_start <- proc.time()
+  message("Final refinement started: ", format(refine_started, "%Y-%m-%d %H:%M:%S %Z"))
   opt.temp <- stats::optim(fits[[best]]$par, objective, method = "L-BFGS-B",
     lower = lower_bounds, upper = upper_bounds,
     control = list(maxit = optim.maxit, factr = 1e5))
+  refine_finished <- Sys.time(); refine_cpu <- proc.time() - refine_cpu_start
+  message(sprintf("Final refinement finished: %s | %.2f min | logLik=%.6f | conv=%d",
+                  format(refine_finished, "%Y-%m-%d %H:%M:%S %Z"),
+                  as.numeric(difftime(refine_finished, refine_started, units="mins")),
+                  -opt.temp$value, opt.temp$convergence))
   sigma2.mle <- exp(opt.temp$par[seq_len(k)])
   tau.mle <- exp(opt.temp$par[k + seq_len(k)])
   rho.mle <- drw_corr_from_z(opt.temp$par[2L * k + seq_len(n.rho)], k)
@@ -760,11 +789,41 @@ drw <- function(data1, data2 = NULL, data3 = NULL, data4 = NULL, data5 = NULL,
       negative_log_likelihood = vals,
       convergence = vapply(fits, function(f) f$convergence, integer(1)))
     res$best.start <- best
-    res$elapsed.note <- "Time measured externally; includes multistart and refinement."
+    res$timing.starts <- do.call(rbind, start_timings)
+    res$timing.refinement <- list(
+      started = refine_started, finished = refine_finished,
+      elapsed_seconds = as.numeric(difftime(refine_finished, refine_started, units="secs")),
+      cpu_seconds = unname(refine_cpu[["user.self"]] + refine_cpu[["sys.self"]]))
   }
-  res$initialization <- list(method=init.method, n.starts=if (method=='mle') as.integer(n.starts) else 0L,
-    univariate=warm, correlation='Cholesky partial correlations')
-  message(paste("Ending at: ", Sys.time()))
+  # Expose warm-start diagnostics in observation-time units. Keep internal
+  # normalized warm starts untouched because the optimizer uses them.
+  warm_report <- lapply(warm, function(w) {
+    if (is.null(w)) return(NULL)
+    w$tau <- w$tau * raw_t_range
+    w$sigma2 <- w$sigma2 / raw_t_range
+    w$sigma <- sqrt(w$sigma2)
+    w
+  })
+  res$initialization <- list(method=init.method,
+    n.starts=if (method=='mle') as.integer(n.starts) else 0L,
+    univariate=warm_report, correlation='Cholesky partial correlations')
+  run_finished <- Sys.time(); run_cpu <- proc.time() - run_cpu_start
+  res$timing <- list(started = run_started, finished = run_finished,
+    elapsed_seconds = as.numeric(difftime(run_finished, run_started, units="secs")),
+    elapsed_minutes = as.numeric(difftime(run_finished, run_started, units="mins")),
+    cpu_user_seconds = unname(run_cpu[["user.self"]]),
+    cpu_system_seconds = unname(run_cpu[["sys.self"]]),
+    cpu_seconds = unname(run_cpu[["user.self"]] + run_cpu[["sys.self"]]),
+    child_cpu_seconds = unname(run_cpu[["user.child"]] + run_cpu[["sys.child"]]),
+    starts = if (method == 'mle') res$timing.starts else NULL,
+    refinement = if (method == 'mle') res$timing.refinement else NULL)
+  if (method == 'mle') {
+    res$timing.starts <- NULL
+    res$timing.refinement <- NULL
+  }
+  message(sprintf("DRW fit finished: %s | total wall %.2f min | CPU %.2f min",
+                  format(run_finished, "%Y-%m-%d %H:%M:%S %Z"),
+                  res$timing$elapsed_minutes, res$timing$cpu_seconds / 60))
   res
 }
 

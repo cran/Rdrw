@@ -1,5 +1,5 @@
 Package: Rdrw
-Version: 1.0.5
+Version: 1.0.6
 Date: 2026-10-13
 Title: Univariate and Multivariate Damped Random Walk Processes
 Authors@R: c(person(given = "Zhirui", family = "Hu", role = "aut"),
@@ -14,6 +14,6 @@ Description: Provides tools for fitting and simulating univariate and multivaria
 License: GPL-2
 Encoding: UTF-8
 NeedsCompilation: no
-Packaged: 2026-10-13 04:56:27 UTC; hyungsuktak
+Packaged: 2026-10-13 07:42:51 UTC; hyungsuktak
 Repository: CRAN
-Date/Publication: 2026-10-13 05:20:02 UTC
+Date/Publication: 2026-10-13 08:30:22 UTC

@@ -31,14 +31,61 @@ drw(data1, data2 = NULL, data3 = NULL, data4 = NULL, data5 = NULL,
 \item{bayes.n.sample}{The number of posterior samples saved after warm-up when \code{method = "bayes"}.}
 }
 \value{
-The returned object is a list. For \code{method = "mle"}, it contains:
+A named list. Time units refer to the original input observation-time units,
+not the internal normalized time coordinate.
+
+For \code{method = "mle"}, the returned components are:
 \describe{
-\item{beta}{Maximum likelihood estimates of the polynomial trend coefficients. The coefficients are returned as a vector ordered by time series. For each time series, the coefficients correspond to powers 0 through \code{poly.order} of normalized time, u = (t - t_min)/(t_max - t_min). Thus, beta_j0 is the fitted mean at the first normalized time point, and higher-order coefficients describe changes over the unit interval of normalized time, not per day.}
-\item{sigma}{Estimated diffusion standard deviations, in units of the observations divided by the square root of the observation time unit.}
-\item{tau}{Estimated characteristic timescales, in the same units as the observation times.}
-\item{rho}{Maximum likelihood estimates of the cross-correlation parameters when \code{n.datasets > 1}; otherwise \code{numeric(0)}.}
+\item{beta}{Fitted polynomial mean coefficients, grouped by series and ordered
+from degree 0 to \code{poly.order}. Polynomial time is normalized to the
+combined observation interval [0, 1]; coefficients of degree 1 and higher
+are not expressed per day.}
+\item{sigma}{Fitted diffusion standard deviations, in measurement units divided
+by the square root of the input time unit. Not stationary standard deviations;
+stationary SD is \code{sigma * sqrt(tau / 2)}.}
+\item{tau}{Fitted damping timescales in the original input time units.}
+\item{rho}{Pairwise correlations of the driving Brownian motions, ordered as
+lower-triangular pairs (2,1), (3,1), (3,2), etc.; empty for a single series.
+These are not zero-lag correlations of the latent processes. The latter equal
+\code{rho_ij * 2 * sqrt(tau_i * tau_j) / (tau_i + tau_j)}.}
+\item{logLik}{Maximized joint log likelihood.}
+\item{convergence}{Convergence code from the final \code{optim} refinement;
+zero conventionally indicates successful optimizer termination.}
+\item{message}{Optimizer's final convergence message, when provided.}
+\item{counts}{Final optimizer function and gradient evaluation counts.}
+\item{starts}{Data frame with each joint starting point, its negative log
+likelihood and convergence code, before final refinement.}
+\item{best.start}{Index of the lowest-objective preliminary joint start.
+The final refinement can improve upon this start.}
+\item{initialization}{List containing \code{method}, \code{n.starts},
+\code{correlation}, and \code{univariate}. The latter is a list, one entry
+per series, of preliminary univariate fit diagnostics, or \code{NULL} when
+unavailable. Each successful entry contains \code{tau} (original time units),
+\code{sigma2} (diffusion variance rate, measurement units squared per input
+time unit), \code{sigma} (its square root), \code{convergence}, \code{logLik},
+\code{cadence}, and \code{baseline} (both in original time units).
+Preliminary estimates are used only as numerical initializations.}
+\item{timing}{List with \code{started} and \code{finished} (local timestamp
+with time-zone information stored as POSIXct), \code{elapsed_seconds},
+\code{elapsed_minutes} (wall-clock duration), \code{cpu_user_seconds},
+\code{cpu_system_seconds}, \code{cpu_seconds} (user plus system CPU consumed
+by the main R process), \code{child_cpu_seconds} (child-process CPU, when
+reported by the platform), \code{starts} (per-start timing data frame),
+and \code{refinement} (final-refinement timing list). Per-start timing rows
+include timestamps, wall and CPU seconds, negative log likelihood, and
+convergence code. Total wall time includes data preparation, preliminary
+univariate fitting, joint starts, refinement, and result assembly.
+CPU time and wall time differ; child CPU is not included in
+\code{cpu_seconds}.}
 }
-For \code{method = "bayes"}, \code{beta}, \code{sigma}, \code{tau}, and \code{rho} contain posterior samples, with one row per saved MCMC iteration. The output also includes \code{sigma.accept.rate}, \code{tau.accept.rate}, and \code{rho.accept.rate}.
+For \code{method = "bayes"}, \code{beta}, \code{sigma}, \code{tau}, and
+\code{rho} are posterior draws, with one row per retained MCMC iteration.
+The sampler also returns \code{sigma.accept.rate}, \code{tau.accept.rate},
+and \code{rho.accept.rate}, describing Metropolis acceptance proportions.
+The \code{initialization} and \code{timing} lists are also returned; for
+Bayesian fits, \code{timing$starts} and \code{timing$refinement} are
+\code{NULL}, because no joint multistart MLE is run. All timings are
+measurements of the current call, not estimates of future runtime.
 }
 \description{
 The function \code{drw} fits univariate and multivariate damped random walk processes to one or more irregularly spaced time series with possibly heteroscedastic measurement errors. The current implementation allows each time series to have a polynomial mean trend in normalized time. This feature is useful in applications such as stock price prediction, where a constant mean may be too restrictive. The likelihood is evaluated by Kalman filtering. Conditional on the damped random walk covariance parameters, the polynomial mean coefficients are linear Gaussian location parameters. For maximum likelihood estimation they are profiled analytically by generalized least squares within the Kalman recursion, and for Bayesian inference they are updated from their exact Gaussian conditional distribution. The function returns maximum likelihood estimates or posterior samples of the model parameters.
@@ -68,7 +115,7 @@ For joint MLE, \code{n.starts = 1} uses the univariate warm starts and an equico
 
 For \code{method = "bayes"}, the same marginal warm starts and valid equicorrelation initialization seed the MCMC directly, without requiring a preliminary joint MLE. The correlation sampler uses bounded unconstrained Cholesky partial correlations, with a uniform prior on these transformed coordinates (not a uniform prior on the pairwise correlations). Symmetric random-walk proposals preserve the target posterior on this parameterization. Other covariance parameters retain bounded uniform priors on their logarithmic coordinates, and the polynomial mean coefficients retain a diffuse Gaussian prior. Data-informed initial states do not enter the posterior prior or likelihood. Multiple chains and convergence checks are recommended.
 
-The result omits the merged data matrix; marginal warm-start diagnostics are in \code{initialization}. Estimated timescales are reported in the observation time units. The diffusion standard deviation \code{sigma} is distinct from the stationary standard deviation: the latter equals \code{sigma * sqrt(tau / 2)}.
+The result omits the merged data matrix; marginal warm-start diagnostics are in \code{initialization}. Both the final estimates and the reported preliminary timescales use the original observation time units. Progress messages report each joint MLE start and its completion, followed by final refinement and total elapsed wall and CPU times. The diffusion standard deviation \code{sigma} is distinct from the stationary standard deviation: the latter equals \code{sigma * sqrt(tau / 2)}.
 
 For multivariate fitting, the individual data sets are merged by observation time. Missing measurements at a given time are allowed and are handled by the Kalman filter. The input measurement-error column should contain standard deviations, not variances.
 
